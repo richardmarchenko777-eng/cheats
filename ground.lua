@@ -1,20 +1,19 @@
--- Наземная станция наведения ПВО (Create Radar -> CC: Tweaked)
+-- Ground SAM Radar Station (Create Radar -> CC: Tweaked)
 
 local CONFIG = {
-    MODEM_SIDE = "back",   -- Сторона, где стоит модем на наземном компе
-    RADAR_SIDE = "right",  -- Сторона, где стоит блок радара/контроллера[cite: 6, 7]
-    CHANNEL = 42,          -- Канал связи с ракетой
-    INTERVAL = 0.1         -- Период отправки координат (сек)
+    MODEM_SIDE = "back",       -- Modem side
+    RADAR_SIDE = "right",      -- Radar / Network Controller side
+    PROTOCOL = "sam_pvo",      -- String protocol name (must match missile.lua)
+    INTERVAL = 0.1             -- Broadcast interval (sec)
 }
 
 rednet.open(CONFIG.MODEM_SIDE)
 local radar = peripheral.wrap(CONFIG.RADAR_SIDE)
 
 if not radar or not radar.getSelectedTrack then
-    error("На стороне '" .. CONFIG.RADAR_SIDE .. "' не найден getSelectedTrack")
+    error("No getSelectedTrack on side: " .. CONFIG.RADAR_SIDE)
 end
 
--- Превращаем строковый ответ getSelectedTrack() в таблицу Lua[cite: 7]
 local function parseTrack(raw)
     if type(raw) == "table" then
         return raw
@@ -39,7 +38,10 @@ local function parseTrack(raw)
     return nil
 end
 
-print("Пост ПВО запущен. Канал: " .. CONFIG.CHANNEL)
+term.clear()
+term.setCursorPos(1, 1)
+print("SAM Ground Station ACTIVE")
+print("Protocol: " .. CONFIG.PROTOCOL)
 
 while true do
     local ok, raw = pcall(radar.getSelectedTrack)
@@ -47,7 +49,7 @@ while true do
     local pos = track and track.position
     local vel = track and track.velocity
 
-    term.setCursorPos(1, 3)
+    term.setCursorPos(1, 4)
     term.clearLine()
 
     if type(pos) == "table" and type(pos.x) == "number" and type(pos.y) == "number" and type(pos.z) == "number" then
@@ -62,10 +64,10 @@ while true do
             category = track.category
         }
 
-        rednet.broadcast(payload, CONFIG.CHANNEL)
-        write(string.format("Цель: %.0f, %.0f, %.0f", pos.x, pos.y, pos.z))
+        rednet.broadcast(payload, CONFIG.PROTOCOL)
+        write(string.format("LOCK: X=%.1f Y=%.1f Z=%.1f", pos.x, pos.y, pos.z))
     else
-        write("Цель не выбрана на радаре...")
+        write("SEARCHING: Select target on radar...")
     end
 
     sleep(CONFIG.INTERVAL)
