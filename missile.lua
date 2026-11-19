@@ -1,16 +1,17 @@
 -- Автопилот ПВО для CC: Tweaked (Create: Aeronautics / Propulsion)
 
 local CONFIG = {
-    MODEM_SIDE = "front",      -- Эндер-модем стоит спереди компьютера
+    MODEM_SIDE = "front",      -- Эндер-модем спереди
     CHANNEL = 42,              -- Канал связи с радаром
-    THRUST_FWD = "right",      -- Маршевый двигатель (справа)
-    THRUST_UP = "top",         -- Руль вверх (сверху)
-    THRUST_DOWN = "bottom",    -- Руль вниз (снизу)
-    THRUST_LEFT = "left",      -- Руль влево (слева)
-    THRUST_RIGHT = "back",     -- Руль вправо (сзади, т.к. спереди модем)
-    PULSE_TIME = 0.08,         -- Длительность импульса рулей в секундах
+    THRUST_FWD = "back",       -- Маршевый двигатель сзади
+    THRUST_UP = "top",         -- Руль вверх
+    THRUST_DOWN = "bottom",    -- Руль вниз
+    THRUST_LEFT = "left",      -- Руль влево
+    THRUST_RIGHT = "right",    -- Рулевой двигатель (в тесте работает 1.5 сек)
+    TEST_RUDDER_TIME = 1.5,    -- Время работы рулевого двигателя в тесте
+    PULSE_TIME = 0.08,         -- Длительность импульса рулей при наведении
     DEADZONE = 2.0,            -- Допустимое отклонение в блоках перед коррекцией
-    TEST_MODE = true           -- true = тест двигателей и рулей без радара, false = полёт к цели
+    TEST_MODE = true           -- true = тест двигателей и рулей, false = полёт к цели
 }
 
 local SIDES = {
@@ -37,20 +38,22 @@ local function pulse(side, duration)
 end
 
 local function runTest()
-    print("=== ТЕСТ ДВИГАТЕЛЕЙ И РУЛЕЙ ===")
-    print("Модем спереди: " .. tostring(CONFIG.MODEM_SIDE))
-    print("Маршевый двигатель: " .. tostring(CONFIG.THRUST_FWD))
-    if CONFIG.THRUST_FWD then
-        rs.setOutput(CONFIG.THRUST_FWD, true)
-        sleep(1.5)
-        rs.setOutput(CONFIG.THRUST_FWD, false)
+    print("=== ТЕСТ РУЛЕВОГО И МАРШЕВОГО ДВИГАТЕЛЕЙ ===")
+
+    -- Тест рулевого двигателя (1.5 сек)
+    if CONFIG.THRUST_RIGHT then
+        print("Тест рулевого (" .. CONFIG.THRUST_RIGHT .. ") на " .. CONFIG.TEST_RUDDER_TIME .. " сек")
+        rs.setOutput(CONFIG.THRUST_RIGHT, true)
+        sleep(CONFIG.TEST_RUDDER_TIME)
+        rs.setOutput(CONFIG.THRUST_RIGHT, false)
+        sleep(0.5)
     end
 
+    -- Короткие импульсы остальных рулей
     local rudders = {
         {name = "ВВЕРХ", side = CONFIG.THRUST_UP},
         {name = "ВНИЗ", side = CONFIG.THRUST_DOWN},
-        {name = "ВЛЕВО", side = CONFIG.THRUST_LEFT},
-        {name = "ВПРАВО", side = CONFIG.THRUST_RIGHT}
+        {name = "ВЛЕВО", side = CONFIG.THRUST_LEFT}
     }
 
     for _, item in ipairs(rudders) do
@@ -61,8 +64,16 @@ local function runTest()
         end
     end
 
+    -- Тест заднего маршевого двигателя
+    if CONFIG.THRUST_FWD then
+        print("Тест маршевого (" .. CONFIG.THRUST_FWD .. ")...")
+        rs.setOutput(CONFIG.THRUST_FWD, true)
+        sleep(1.0)
+        rs.setOutput(CONFIG.THRUST_FWD, false)
+    end
+
     resetOutputs()
-    print("Тест завершён. Чтобы включить наведение, поставь TEST_MODE = false.")
+    print("Тест завершён.")
 end
 
 local function steerToTarget(targetX, targetY, targetZ)
@@ -113,7 +124,7 @@ local ok, err = pcall(function()
         rs.setOutput(CONFIG.THRUST_FWD, true)
     end
 
-    print("ПВО активно. Модем спереди, канал: " .. CONFIG.CHANNEL)
+    print("ПВО активно. Модем спереди, марш сзади, канал: " .. CONFIG.CHANNEL)
 
     while true do
         local _, msg = rednet.receive(CONFIG.CHANNEL, 0.2)
