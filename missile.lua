@@ -1,4 +1,4 @@
--- SAM Missile Autopilot (CC: Tweaked + Create Aeronautics / Propulsion)
+-- SAM Missile Combat Autopilot (CC: Tweaked + Create Aeronautics / Propulsion)
 
 local CONFIG = {
     MODEM_SIDE = "front",      -- Ender modem on front
@@ -8,10 +8,12 @@ local CONFIG = {
     THRUST_DOWN = "bottom",    -- Down thruster
     THRUST_LEFT = "left",      -- Left thruster
     THRUST_RIGHT = "right",    -- Right thruster
-    TEST_RUDDER_TIME = 1.5,
-    PULSE_TIME = 0.08,
-    DEADZONE = 2.0,
-    TEST_MODE = true           -- Change to false when ready for radar guidance
+    WARHEAD_SIDE = nil,        -- Side for detonation signal (e.g. via Redstone Link)
+    PULSE_TIME = 0.08,         -- Rudder pulse duration (sec)
+    DEADZONE = 1.5,            -- Acceptable error before correction (blocks)
+    LEAD_FACTOR = 0.5,         -- Velocity lead multiplier (seconds ahead)
+    DETONATE_DIST = 4.0,       -- Proximity fuse radius (blocks)
+    TEST_MODE = false          -- Combat guidance mode
 }
 
 local SIDES = {
@@ -19,7 +21,8 @@ local SIDES = {
     CONFIG.THRUST_UP,
     CONFIG.THRUST_DOWN,
     CONFIG.THRUST_LEFT,
-    CONFIG.THRUST_RIGHT
+    CONFIG.THRUST_RIGHT,
+    CONFIG.WARHEAD_SIDE
 }
 
 local function resetOutputs()
@@ -37,59 +40,52 @@ local function pulse(side, duration)
     rs.setOutput(side, false)
 end
 
-local function runTest()
-    print("=== THRUSTER & RUDDER TEST ===")
-
-    if CONFIG.THRUST_RIGHT then
-        print("Testing RIGHT (" .. CONFIG.THRUST_RIGHT .. ") for " .. CONFIG.TEST_RUDDER_TIME .. "s")
-        rs.setOutput(CONFIG.THRUST_RIGHT, true)
-        sleep(CONFIG.TEST_RUDDER_TIME)
-        rs.setOutput(CONFIG.THRUST_RIGHT, false)
-        sleep(0.5)
+local function detonate()
+    print("!!! PROXIMITY FUSE TRIGGERED - DETONATING !!!")
+    if CONFIG.WARHEAD_SIDE then
+        rs.setOutput(CONFIG.WARHEAD_SIDE, true)
     end
-
-    local rudders = {
-        {name = "UP", side = CONFIG.THRUST_UP},
-        {name = "DOWN", side = CONFIG.THRUST_DOWN},
-        {name = "LEFT", side = CONFIG.THRUST_LEFT}
-    }
-
-    for _, item in ipairs(rudders) do
-        if item.side then
-            print("Pulse [" .. item.name .. "] -> " .. item.side)
-            pulse(item.side, CONFIG.PULSE_TIME)
-            sleep(0.5)
-        end
-    end
-
-    if CONFIG.THRUST_FWD then
-        print("Testing MAIN (" .. CONFIG.THRUST_FWD .. ")...")
-        rs.setOutput(CONFIG.THRUST_FWD, true)
-        sleep(1.0)
-        rs.setOutput(CONFIG.THRUST_FWD, false)
-    end
-
     resetOutputs()
-    print("Test finished.")
+    if CONFIG.WARHEAD_SIDE then
+        rs.setOutput(CONFIG.WARHEAD_SIDE, true)
+    end
 end
 
-local function steerToTarget(targetX, targetY, targetZ)
-    local x, y, z = gps.locate(0.5)
+local function steerToTarget(msg)
+    local x, y, z = gps.locate(0.2)
     if not x then
-        print("NO GPS SIGNAL! Check GPS hosts.")
-        return
+        print("NO GPS SIGNAL! Build 4 GPS host computers.")
+        return false
     end
 
-    local dx = targetX - x
-    local dy = targetY - y
-    local dz = targetZ - z
+    -- Calculate predicted target position using velocity
+    local aimX = msg.x + (msg.vx or 0) * CONFIG.LEAD_FACTOR
+    local aimY = msg.y + (msg.vy or 0) * CONFIG.LEAD_FACTOR
+    local aimZ = msg.z + (msg.vz or 0) * CONFIG.LEAD_FACTOR
 
+    local dx = aimX - x
+    local dy = aimY - y
+    local dz = aimZ - z
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    term.setCursorPos(1, 4)
+    term.clearLine()
+    write(string.format("DIST: %.1fm | dX:%.0f dY:%.0f dZ:%.0f", dist, dx, dy, dz))
+
+    -- Proximity detonation check
+    if dist <= CONFIG.DETONATE_DIST then
+        detonate()
+        return true
+    end
+
+    -- Vertical correction (Y)
     if dy > CONFIG.DEADZONE then
         pulse(CONFIG.THRUST_UP, CONFIG.PULSE_TIME)
     elseif dy < -CONFIG.DEADZONE then
         pulse(CONFIG.THRUST_DOWN, CONFIG.PULSE_TIME)
     end
 
+    -- Horizontal correction (X / Z)
     if math.abs(dx) >= math.abs(dz) then
         if dx > CONFIG.DEADZONE then
             pulse(CONFIG.THRUST_RIGHT, CONFIG.PULSE_TIME)
@@ -103,33 +99,38 @@ local function steerToTarget(targetX, targetY, targetZ)
             pulse(CONFIG.THRUST_LEFT, CONFIG.PULSE_TIME)
         end
     end
+
+    return false
 end
 
 local ok, err = pcall(function()
-    if CONFIG.TEST_MODE then
-        runTest()
-        return
-    end
+    rednet.open(CONFIG.MODEM_SIDE)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("SAM MISSILE ARMED. Waiting for target lock...")
 
-    if CONFIG.MODEM_SIDE then
-        rednet.open(CONFIG.MODEM_SIDE)
-    end
-
-    if CONFIG.THRUST_FWD then
-        rs.setOutput(CONFIG.THRUST_FWD, true)
-    end
-
-    print("SAM GUIDANCE ACTIVE. Protocol: " .. CONFIG.PROTOCOL)
+    local launched = false
 
     while true do
         local _, msg = rednet.receive(CONFIG.PROTOCOL, 0.2)
         if type(msg) == "table" and msg.x and msg.y and msg.z then
-            steerToTarget(msg.x, msg.y, msg.z)
+            if not launched then
+                launched = true
+                print("TARGET ACQUIRED - LAUNCHING!")
+                if CONFIG.THRUST_FWD then
+                    rs.setOutput(CONFIG.THRUST_FWD, true)
+                end
+            end
+
+            local hit = steerToTarget(msg)
+            if hit then
+                break
+            end
         end
     end
 end)
 
-resetOutputs()
-if not ok and err then
+if not ok then
+    resetOutputs()
     print("Stopped: " .. tostring(err))
 end
