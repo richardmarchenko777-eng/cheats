@@ -1,0 +1,180 @@
+-- Стационарная САУ / Артиллерия для Create Big Cannons + CC: Tweaked (cc-cbc)
+
+local CONFIG = {
+  -- 1. Координаты твоего Cannon Mount (заполни один раз!)
+  GUN_X = -4914,
+  GUN_Y = -59,
+  GUN_Z = -564,
+
+  -- Смещение нулевого угла лафета (0, 90, 180 или 270 — подстрой, если пушка смотрит не на +Z)
+  YAW_OFFSET = 0,
+
+  -- 2. Баллистика твоей пушки (подстрой под длину ствола и кол-во пороховых зарядов)
+  V0 = 2.5,          -- начальная скорость (блоков/тик). Для 2-4 зарядов обычно 2.0 - 4.0
+  GRAVITY = 0.05,    -- гравитация CBC (обычно 0.05 блоков/тик^2)
+  DRAG = 0.99,       -- сопротивление воздуха за тик (0.99 для стандартных снарядов)
+  MAX_TICKS = 600,   -- макс. время полета (30 сек)
+  HIGH_ARC = true    -- true = навесной огонь (гаубица), false = прямой выстрел
+}
+
+-- Поиск подключенного Cannon Mount
+local mount = peripheral.find("cannon_mount")
+if not mount then
+  -- На случай если периферия называется иначе в этой версии cc-cbc
+  for _, name in ipairs(peripheral.getNames()) do
+    local t = peripheral.getType(name)
+    if t and (t:find("cannon") or t:find("mount")) then
+      mount = peripheral.wrap(name)
+      break
+    end
+  end
+end
+
+if not mount then
+  print("ОШИБКА: Cannon Mount не найден! Проверь подключение кабелем или вплотную.")
+  return
+end
+
+local function normAngle(deg)
+  return (deg + 180) % 360 - 180
+end
+
+local function calcYaw(sx, sz, tx, tz)
+  local dx = tx - sx
+  local dz = tz - sz
+  local worldYaw = math.deg(math.atan2(-dx, dz))
+  return normAngle(worldYaw - CONFIG.YAW_OFFSET)
+end
+
+local function simulateShot(sx, sy, sz, tx, ty, tz, worldYawDeg, pitchDeg)
+  local yawRad = math.rad(worldYawDeg)
+  local pitchRad = math.rad(pitchDeg)
+
+  local horizSpeed = CONFIG.V0 * math.cos(pitchRad)
+  local vx = -math.sin(yawRad) * horizSpeed
+  local vy = CONFIG.V0 * math.sin(pitchRad)
+  local vz = math.cos(yawRad) * horizSpeed
+
+  local x, y, z = sx, sy, sz
+  local bestDist = math.huge
+
+  for _ = 1, CONFIG.MAX_TICKS do
+    x = x + vx
+    y = y + vy
+    z = z + vz
+
+    vx = vx * CONFIG.DRAG
+    vy = vy * CONFIG.DRAG - CONFIG.GRAVITY
+    vz = vz * CONFIG.DRAG
+
+    local dx = tx - x
+    local dy = ty - y
+    local dz = tz - z
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if dist < bestDist then
+      bestDist = dist
+    end
+
+    if y < ty and vy < 0 then
+      break
+    end
+  end
+
+  return bestDist
+end
+
+local function solvePitch(sx, sy, sz, tx, ty, tz, worldYawDeg)
+  local minPitch = CONFIG.HIGH_ARC and 45.0 or -15.0
+  local maxPitch = CONFIG.HIGH_ARC and 85.0 or 45.0
+
+  local bestPitch = nil
+  local bestErr = math.huge
+
+  for p = minPitch, maxPitch, 0.5 do
+    local err = simulateShot(sx, sy, sz, tx, ty, tz, worldYawDeg, p)
+    if err < bestErr then
+      bestErr = err
+      bestPitch = p
+    end
+  end
+
+  if bestPitch then
+    local center = bestPitch
+    for p = math.max(minPitch, center - 1.0), math.min(maxPitch, center + 1.0), 0.02 do
+      local err = simulateShot(sx, sy, sz, tx, ty, tz, worldYawDeg, p)
+      if err < bestErr then
+        bestErr = err
+        bestPitch = p
+      end
+    end
+  end
+
+  return bestPitch, bestErr
+end
+
+-- Основной цикл работы
+while true do
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== СТАЦИОНАРНАЯ АРТИЛЛЕРИЯ ===")
+  print(string.format("Позиция орудия: X=%d Y=%d Z=%d", CONFIG.GUN_X, CONFIG.GUN_Y, CONFIG.GUN_Z))
+  print("-------------------------------")
+
+  write("Цель X (или 'exit'): ")
+  local inX = read()
+  if inX == "exit" then break end
+  local tx = tonumber(inX)
+
+  write("Цель Y: ")
+  local ty = tonumber(read())
+
+  write("Цель Z: ")
+  local tz = tonumber(read())
+
+  if not (tx and ty and tz) then
+    print("Ошибка ввода координат!")
+    sleep(1.5)
+  else
+    local worldYaw = math.deg(math.atan2(-(tx - CONFIG.GUN_X), (tz - CONFIG.GUN_Z)))
+    local mountYaw = normAngle(worldYaw - CONFIG.YAW_OFFSET)
+    local pitch, err = solvePitch(CONFIG.GUN_X, CONFIG.GUN_Y, CONFIG.GUN_Z, tx, ty, tz, worldYaw)
+
+    print("\n--- Расчет завершен ---")
+    print(string.format("Yaw (поворот): %.2f deg", mountYaw))
+    print(string.format("Pitch (подъем): %.2f deg", pitch))
+    print(string.format("Расчетная точность: %.2f бл.", err))
+
+    if err > 5.0 then
+      print("ВНИМАНИЕ: Цель слишком далеко или близко для этого заряда!")
+    end
+
+    -- Наводим пушку через cc-cbc
+    -- Примечание: в cc-cbc методы обычно называются setYaw / setPitch и fire
+    if mount.setYaw and mount.setPitch then
+      mount.setYaw(mountYaw)
+      mount.setPitch(pitch)
+      print("Наведение ствола...")
+      sleep(2.5) -- ждем пока шестеренки довернут ствол
+    else
+      print("Доступные методы лафета:")
+      for k, _ in pairs(mount) do write(k .. " ") end
+      print("")
+    end
+
+    write("\nОгонь? (y/n): ")
+    local confirm = read()
+    if confirm:lower() == "y" then
+      if mount.fire then
+        mount.fire()
+        print("ВЫСТРЕЛ!")
+      else
+        -- Запасной вариант: подать редстоун-сигнал сзади/снизу на лафет
+        redstone.setOutput("back", true)
+        sleep(0.2)
+        redstone.setOutput("back", false)
+        print("Сигнал выстрела (Redstone) подан!")
+      end
+      sleep(2)
+    end
+  end
+end
